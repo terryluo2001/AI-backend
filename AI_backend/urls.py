@@ -16,11 +16,11 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from AI_backend.user import (register, onboard, login)
+from AI_backend.user import (register, update_user, login)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('register/', register),
-    path('onboard/', onboard),
+    path('update-user/', update_user),
     path('login/', login)
 ]
