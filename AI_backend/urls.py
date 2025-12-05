@@ -17,10 +17,12 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 from AI_backend.user import (register, update_user, login)
+from AI_backend.article import (add_article)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('register/', register),
     path('update-user/', update_user),
-    path('login/', login)
+    path('login/', login),
+    path('add-article/', add_article)
 ]

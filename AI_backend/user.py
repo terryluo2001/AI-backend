@@ -212,7 +212,6 @@ def login(request):
                 (username, encrypted_password)
             )  
             result = cursor.fetchone()
-            print(result)
             if result:
                 return JsonResponse({'success': True, 'topic_weights': result[4], 'email': result[2], 'topic_preferences': result[7]})
             return JsonResponse({'success': False})
