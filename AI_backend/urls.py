@@ -16,13 +16,17 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from AI_backend.user import (register, update_user, login)
-from AI_backend.article import (add_article)
+from AI_backend.user import (register, update_user, login,)
+from AI_backend.article import (add_article, get_article, toggle_like, toggle_dislike, answer)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('register/', register),
     path('update-user/', update_user),
     path('login/', login),
-    path('add-article/', add_article)
+    path('add-article/', add_article),
+    path('get-articles/', get_article),
+    path('toggle-like/<int:article_id>/', toggle_like),
+    path('toggle-dislike/<int:article_id>/', toggle_dislike),
+    path('answer/', answer)
 ]
