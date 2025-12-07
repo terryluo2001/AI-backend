@@ -68,10 +68,11 @@ def add_article(request):
 
             # Creating article index on pinecone
             article_index = pc.Index("article-embeddings")
-            # Storing embedding on pinecone with article_id
+            # Storing embedding on pinecone with article_id and author metadata
             vector = {
                 "id": str(article_id),
-                "values": embedding_values
+                "values": embedding_values,
+                "metadata": {"author": author}
             }
             article_index.upsert(vectors=[vector])
 
@@ -91,7 +92,7 @@ def add_article(request):
     return JsonResponse({'error': 'Only POST method allowed'}, status=405)
 
 @csrf_exempt
-def get_article(request):
+def get_recommended_article(request):
     if request.method == 'GET':
         conn = None
         cursor = None
@@ -109,11 +110,12 @@ def get_article(request):
 
             embedding_values = ((fetch_response.vectors)[username]).values 
 
-            # 2. Query Pinecone for relevant articles
+            # 2. Query Pinecone for relevant articles (excluding user's own articles)
             article_index = pc.Index("article-embeddings")
             search_results = article_index.query(
                 vector=embedding_values,
                 top_k=10, # Adjustable
+                filter={"author": {"$ne": username}},
                 include_values=False
             )
             
@@ -141,14 +143,26 @@ def get_article(request):
             query = f"""SELECT article.id, article.title, article.content, article.topics, 
             article.author, article.created_at, article.like_count, article.dislike_count, 
             user_answers.question_text, user_answers.answer_text, user_answers.id FROM article 
-            INNER JOIN user_answers ON article.id = user_answers.article_id WHERE article.id IN ({format_strings})"""
+            INNER JOIN user_answers ON article.id = user_answers.article_id 
+            WHERE article.id IN ({format_strings})"""
             cursor.execute(query, tuple(article_ids))
-            
             articles_db = cursor.fetchall()
 
             # Convert to list of dicts
             articles_map = {}
             for row in articles_db:
+                query = """SELECT comment.id, comment.text, comment.article_id, comment.author, comment.created_at
+                FROM comment WHERE comment.article_id = %s ORDER BY comment.created_at DESC"""
+                cursor.execute(query, (row[0],))
+                comments = cursor.fetchall()
+                article_comments = []
+                for comment in comments:
+                    article_comments.append({
+                        'id': comment[0],
+                        'text': comment[1],
+                        'author': comment[3],
+                        'createdAt': comment[4]
+                    })
                 articles_map[str(row[0])] = {
                     'id': row[0],
                     'title': row[1],
@@ -160,7 +174,8 @@ def get_article(request):
                     'likes': row[6],
                     'dislikes': row[7],
                     'questions': {'id': row[10], 'text': row[8]},
-                    'answers': {'id': row[10], 'text': row[9]}
+                    'answers': {'id': row[10], 'text': row[9]},
+                    'comments': article_comments
                 }
 
             query = f"SELECT * FROM interactionEvent WHERE article_id IN ({format_strings}) AND username = %s"
@@ -169,17 +184,99 @@ def get_article(request):
             interaction_events = cursor.fetchall()
 
             interaction_dict = {row[2]: row[3] for row in interaction_events} 
-            print(articles_map)
             for interaction in interaction_dict:
-                print(str(interaction))
-                print(articles_map[str(interaction)])
                 articles_map[str(interaction)]['userAction'] = "like" if interaction_dict[interaction] == 1 else "dislike"
-                print("Wrong")
             # Reconstruct list in order of Pinecone results
             ordered_articles = []
             for art_id in article_ids:
                 if art_id in articles_map:
                     ordered_articles.append(articles_map[art_id])
+
+            return JsonResponse({'articles': ordered_articles})
+
+        except mysql.connector.Error as err:
+            return JsonResponse({'error': err.msg}, status=500)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+    return JsonResponse({'error': 'Only GET method allowed'}, status=405)
+
+@csrf_exempt
+def get_articles(request):
+    if request.method == 'GET':
+        conn = None
+        cursor = None
+        try:
+
+            username = request.GET.get('username')
+            if not username:
+                return JsonResponse({'error': 'Username is required'}, status=400)
+
+            # 3. Fetch full article details from MySQL
+            conn = mysql.connector.connect(
+                host=os.getenv("DB_HOST"),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD"),
+                database=os.getenv("DB_DATABASE")
+            )
+            cursor = conn.cursor()
+            
+            query = """SELECT article.id, article.title, article.content, article.topics, 
+            article.author, article.created_at, article.like_count, article.dislike_count, 
+            user_answers.question_text, user_answers.answer_text, user_answers.id FROM article 
+            INNER JOIN user_answers ON article.id = user_answers.article_id"""
+            cursor.execute(query)
+            articles_db = cursor.fetchall()
+
+            # Convert to list of dicts
+            articles_map = {}
+            for row in articles_db:
+                query = """SELECT comment.id, comment.text, comment.article_id, comment.author, comment.created_at
+                FROM comment WHERE comment.article_id = %s ORDER BY comment.created_at DESC"""
+                cursor.execute(query, (row[0],))
+                comments = cursor.fetchall()
+                article_comments = []
+                for comment in comments:
+                    article_comments.append({
+                        'id': comment[0],
+                        'text': comment[1],
+                        'author': comment[3],
+                        'createdAt': comment[4]
+                    })
+                articles_map[str(row[0])] = {
+                    'id': row[0],
+                    'title': row[1],
+                    'snippet': row[2][:100] + '...',
+                    'content': row[2],
+                    'topics': json.loads(row[3]) if row[3] else [],
+                    'author': row[4],
+                    'createdAt': row[5],
+                    'likes': row[6],
+                    'dislikes': row[7],
+                    'questions': {'id': row[10], 'text': row[8]},
+                    'answers': {'id': row[10], 'text': row[9]},
+                    'comments': article_comments
+                }
+            
+            query = f"SELECT * FROM interactionEvent WHERE username = %s"
+            params = (username,)
+            cursor.execute(query, params)
+            interaction_events = cursor.fetchall()
+            interaction_dict = {row[2]: row[3] for row in interaction_events} 
+            for interaction in interaction_dict:
+                print(articles_map, str(interaction))
+                print(articles_map[str(interaction)])
+                articles_map[str(interaction)]['userAction'] = "like" if interaction_dict[interaction] == 1 else "dislike"
+
+            # Reconstruct list in order of Pinecone results
+            ordered_articles = []
+            for article in articles_map:
+                ordered_articles.append(articles_map[article])
 
             return JsonResponse({'articles': ordered_articles})
 
@@ -241,7 +338,12 @@ def toggle_like(request, article_id):
         topics = json.loads(cursor.fetchone()[0])
         for topic in topics:
             if topic in topic_weights:
-                topic_weights[topic] += 1
+                if 'userAction' not in data:
+                    topic_weights[topic] += 1
+                elif data['userAction'] == 'dislike':
+                    topic_weights[topic] += 1
+                elif data['userAction'] == 'like':
+                    topic_weights[topic] -= 1
         
         query = "UPDATE user SET topic_weights = %s WHERE username = %s"
         cursor.execute(query, (json.dumps(topic_weights), username))
@@ -311,7 +413,12 @@ def toggle_dislike(request, article_id):
         topics = json.loads(cursor.fetchone()[0])
         for topic in topics:
             if topic in topic_weights:
-                topic_weights[topic] -= 1
+                if 'userAction' not in data:
+                    topic_weights[topic] -= 1
+                elif data['userAction'] == 'dislike':
+                    topic_weights[topic] += 1
+                elif data['userAction'] == 'like':
+                    topic_weights[topic] -= 1
         
         query = "UPDATE user SET topic_weights = %s WHERE username = %s"
         cursor.execute(query, (json.dumps(topic_weights), username))
@@ -354,9 +461,67 @@ def answer(request):
         data = json.loads(request.body)
         answers = data['answers']
         print(answers)
-        query = "UPDATE user_answers SET answer_text = %s WHERE id = %s"
-        cursor.execute(query, (answers['text'], int(answers['id'])))
+        query = "SELECT is_answered from user_answers WHERE id = %s"
+        cursor.execute(query, (int(answers['id']),))
+        result = cursor.fetchone()
+        
+        query = "UPDATE user_answers SET answer_text = %s, is_answered = %s WHERE id = %s"
+        cursor.execute(query, (answers['text'], True, int(answers['id'])))
+
+        if result[0]:          
+            conn.commit()
+            return JsonResponse({'error': 'Answer already given'}, status=400)
+        
+        query = "SELECT * FROM user_answers WHERE id = %s"
+        cursor.execute(query, (int(answers['id']),))
+        result = cursor.fetchone()
+
+        username = result[1]
+        article_id = result[2]
+        query = "SELECT topic_weights FROM user WHERE username = %s"
+        cursor.execute(query, (username,))
+        topic_weights = json.loads(cursor.fetchone()[0])
+        
+        query = "SELECT topics FROM article WHERE id = %s"
+        cursor.execute(query, (article_id,))
+        topics = json.loads(cursor.fetchone()[0])
+        for topic in topics:
+            if topic in topic_weights:
+                topic_weights[topic] += 1
+        
+        query = "UPDATE user SET topic_weights = %s WHERE username = %s"
+        cursor.execute(query, (json.dumps(topic_weights), username))
         conn.commit()
         return JsonResponse({'message': 'Answer successfully'}, status=200)
+
+    return JsonResponse({'error': 'Only POST method allowed'}, status=405)
+
+@csrf_exempt
+def comment(request): 
+    if request.method == 'POST':
+        conn = None
+        cursor = None
+        
+        conn = mysql.connector.connect(
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_DATABASE")
+        )
+        cursor = conn.cursor()
+
+        data = json.loads(request.body)
+        print(data)
+        article_id = data['article_id']
+        text = data['text']
+        author = data['author']
+        query = "INSERT INTO comment (text, article_id, author, created_at) VALUES (%s, %s, %s, %s)"
+        cursor.execute(query, (text, article_id, author, datetime.now()))
+        comment_id = cursor.lastrowid
+
+        query = "INSERT INTO notification (article_id, author, time, comment_id) VALUES (%s, %s, %s, %s)"
+        cursor.execute(query, (article_id, author, datetime.now(), comment_id))
+        conn.commit()
+        return JsonResponse({'message': 'Answer successfully', 'id': comment_id, 'author': author, 'text': text, 'created_at': datetime.now()}, status=200)
 
     return JsonResponse({'error': 'Only POST method allowed'}, status=405)
