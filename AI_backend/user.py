@@ -18,6 +18,8 @@ pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 def register(request):
 
     if request.method == 'POST':
+        conn = None
+        cursor = None
         try:
             data = json.loads(request.body)
             username = data['username']
@@ -110,6 +112,8 @@ def register(request):
 def update_user(request):
 
     if request.method == 'PATCH':
+        conn = None
+        cursor = None
         try:
             data = json.loads(request.body)
             username = data['username']
@@ -183,6 +187,8 @@ def update_user(request):
 @csrf_exempt
 def login(request):
     if request.method == 'POST':
+        conn = None
+        cursor = None
         try:
             data = json.loads(request.body)
             username = data['username']

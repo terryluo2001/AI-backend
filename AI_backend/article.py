@@ -19,6 +19,8 @@ pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 def add_article(request):
 
     if request.method == 'POST':
+        conn = None
+        cursor = None
         try:
             data = json.loads(request.body)
             title = data['title']
@@ -269,15 +271,13 @@ def get_articles(request):
             interaction_events = cursor.fetchall()
             interaction_dict = {row[2]: row[3] for row in interaction_events} 
             for interaction in interaction_dict:
-                print(articles_map, str(interaction))
-                print(articles_map[str(interaction)])
                 articles_map[str(interaction)]['userAction'] = "like" if interaction_dict[interaction] == 1 else "dislike"
 
             # Reconstruct list in order of Pinecone results
             ordered_articles = []
             for article in articles_map:
                 ordered_articles.append(articles_map[article])
-
+            
             return JsonResponse({'articles': ordered_articles})
 
         except mysql.connector.Error as err:
