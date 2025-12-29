@@ -21,9 +21,6 @@ class ArticleConsumer(AsyncWebsocketConsumer):
         # Send message to WebSocket
         await self.send(text_data=json.dumps(event))
 
-    async def new_article(self, event):
-        await self.send(text_data=json.dumps(event))
-
 
 class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):

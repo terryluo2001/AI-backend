@@ -30,12 +30,11 @@ def add_article(request):
             content = data['content']
             topics = data['topics']
             author = data['username']
-
             article = json.dumps({
                 "title": title,
                 "content": content
             })
-
+            print(article)
             # Creating embedding for the topic preferences
             response = client.embeddings.create(
                 model="text-embedding-3-small",
@@ -48,7 +47,7 @@ def add_article(request):
                 password=os.getenv("DB_PASSWORD"),
                 database=os.getenv("DB_DATABASE")
             )
-        
+            print(embedding_values)
             cursor = conn.cursor()
             
             # Insert into article table
@@ -56,7 +55,6 @@ def add_article(request):
             values = (title, content, json.dumps(topics), author, datetime.now(), 0, 0)
             cursor.execute(query, values)
             article_id = cursor.lastrowid
-
             answer_text = ""
             prompt = f"Generate a short, clear question for a user based on this article:\nTitle: {title}\nContent: {content}\nQuestion:"
             response = client.chat.completions.create(
@@ -82,25 +80,6 @@ def add_article(request):
             article_index.upsert(vectors=[vector])
 
             conn.commit()
-
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "articles",
-                {
-                    "type": "new_article",
-                    "article": {
-                        "id": article_id,
-                        "title": title,
-                        "content": content,
-                        'snippet': content[:100] + '...',
-                        "topics": topics,
-                        "author": author,
-                        "createdAt": str(datetime.now()),
-                        "likes": 0,
-                        "dislikes": 0
-                    }
-                }
-            )
             return JsonResponse({'message': 'Article added successfully', 'id': article_id})
 
         except mysql.connector.Error as err:
