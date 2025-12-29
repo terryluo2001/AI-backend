@@ -16,7 +16,6 @@ def notification(request, username):
         conn = None
         cursor = None
         try:
-            print(username)
 
             conn = mysql.connector.connect(
                 host=os.getenv('DB_HOST'),
@@ -30,16 +29,14 @@ def notification(request, username):
             INNER JOIN comment ON comment.id = notification.comment_id
             WHERE article.author = %s AND notification.author != article.author ORDER BY notification.time DESC""", (username,))
             notifications = cursor.fetchall()
-            print(notifications)
             returned_notifications = []
             for notification in notifications:
                 comment_text = notification[5]
                 if len(comment_text) > 50:
                     comment_text = comment_text[:47] + "..."
-                
                 returned_notifications.append({
                     "id": notification[0],
-                    "time": notification[1].strftime("%d/%m/%Y %H:%M"),
+                    "time": notification[1],
                     "message": f"{notification[3]} commented on '{notification[4]}': \"{comment_text}\"",
                     "articleId": notification[2],
                     "author": notification[3],
@@ -63,7 +60,6 @@ def delete_notification(request, id):
         conn = None
         cursor = None
         try:
-            print(id)
             conn = mysql.connector.connect(
                 host=os.getenv('DB_HOST'),
                 user=os.getenv('DB_USER'),

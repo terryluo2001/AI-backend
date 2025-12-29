@@ -172,7 +172,6 @@ def update_user(request):
                 if "user.email" in str(err):
                     errors['email'] = 'Email already exists'
                 if errors:
-                    print(errors)
                     return JsonResponse({'errors': errors}, status=400)
             return JsonResponse({'error': err.msg}, status=500)   
         finally:

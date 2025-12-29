@@ -14,6 +14,9 @@ from datetime import datetime
 load_dotenv()
 client = OpenAI()
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+
 
 @csrf_exempt
 def add_article(request):
@@ -79,6 +82,25 @@ def add_article(request):
             article_index.upsert(vectors=[vector])
 
             conn.commit()
+
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "articles",
+                {
+                    "type": "new_article",
+                    "article": {
+                        "id": article_id,
+                        "title": title,
+                        "content": content,
+                        'snippet': content[:100] + '...',
+                        "topics": topics,
+                        "author": author,
+                        "createdAt": str(datetime.now()),
+                        "likes": 0,
+                        "dislikes": 0
+                    }
+                }
+            )
             return JsonResponse({'message': 'Article added successfully', 'id': article_id})
 
         except mysql.connector.Error as err:
@@ -363,7 +385,23 @@ def toggle_like(request, article_id):
         user_index.upsert(
             vectors=[vector]
         )
+
+        # Fetch updated counts
+        cursor.execute("SELECT like_count, dislike_count FROM article WHERE id = %s", (article_id,))
+        counts = cursor.fetchone()
         conn.commit()
+        
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "articles",
+            {
+                "type": "article_update",
+                "action": "like",
+                "article_id": article_id,
+                "likes": counts[0],
+                "dislikes": counts[1]
+            }
+        )
         return JsonResponse({'message': 'Like added successfully'}, status=200)
 
     return JsonResponse({'error': 'Only GET method allowed'}, status=405)
@@ -440,6 +478,24 @@ def toggle_dislike(request, article_id):
         )
 
         conn.commit()
+
+        channel_layer = get_channel_layer()
+        
+        # Fetch updated counts
+        cursor.execute("SELECT like_count, dislike_count FROM article WHERE id = %s", (article_id,))
+        counts = cursor.fetchone()
+
+        async_to_sync(channel_layer.group_send)(
+            "articles",
+            {
+                "type": "article_update",
+                "action": "dislike",
+                "article_id": article_id,
+                "likes": counts[0],
+                "dislikes": counts[1]
+            }
+        )
+
         return JsonResponse({'message': 'Dislike added successfully'}, status=200)
 
     return JsonResponse({'error': 'Only POST method allowed'}, status=405)
@@ -460,7 +516,6 @@ def answer(request):
 
         data = json.loads(request.body)
         answers = data['answers']
-        print(answers)
         query = "SELECT is_answered from user_answers WHERE id = %s"
         cursor.execute(query, (int(answers['id']),))
         result = cursor.fetchone()
@@ -492,6 +547,15 @@ def answer(request):
         query = "UPDATE user SET topic_weights = %s WHERE username = %s"
         cursor.execute(query, (json.dumps(topic_weights), username))
         conn.commit()
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "articles",
+            {
+                "type": "article_update",
+                "action": "answer",
+                "article_id": article_id
+            }
+        )
         return JsonResponse({'message': 'Answer successfully'}, status=200)
 
     return JsonResponse({'error': 'Only POST method allowed'}, status=405)
@@ -511,7 +575,6 @@ def comment(request):
         cursor = conn.cursor()
 
         data = json.loads(request.body)
-        print(data)
         article_id = data['article_id']
         text = data['text']
         author = data['author']
@@ -521,7 +584,42 @@ def comment(request):
 
         query = "INSERT INTO notification (article_id, author, time, comment_id) VALUES (%s, %s, %s, %s)"
         cursor.execute(query, (article_id, author, datetime.now(), comment_id))
+        notification_id = cursor.lastrowid
         conn.commit()
+
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            "articles",
+            {
+                "type": "article_update",
+                "action": "comment",
+                "article_id": article_id,
+                "comment": {
+                     'id': comment_id, 'author': author, 'text': text, 'createdAt': str(datetime.now())
+                }
+            }
+        )
+
+        cursor.execute("SELECT author, title FROM article WHERE id = %s", (article_id,))
+        article_row = cursor.fetchone()
+        if article_row:
+             article_author = article_row[0]
+             article_title = article_row[1]
+             if article_author != author: # don't notify self
+                 async_to_sync(channel_layer.group_send)(
+                    f"user_{article_author}",
+                    {
+                        "type": "new_notification",
+                        "notification": {
+                             "id": notification_id,
+                             "message": f"{author} commented on '{article_title}': \"{text[:47] + '...' if len(text) > 50 else text}\"",
+                             "articleId": article_id,
+                             "author": author,
+                             "time": str(datetime.now())
+                        }
+                    }
+                 )
+
         return JsonResponse({'message': 'Answer successfully', 'id': comment_id, 'author': author, 'text': text, 'created_at': datetime.now()}, status=200)
 
     return JsonResponse({'error': 'Only POST method allowed'}, status=405)
